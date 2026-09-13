@@ -25,6 +25,10 @@ node --test tests/route-state.test.js
 
 Inloggade användare kan spara album i en separat önskelista och visa andra användares önskelistor skrivskyddat. Databastabellen och dess RLS-policyer finns i `supabase/migrations/20260911000000_create_wishlists.sql`.
 
+## Installation på mobil
+
+Groovy kan installeras som en webbapp på Android och läggas till på hemskärmen på iPhone. Manifest och ikoner finns i repot. Service workern är avsiktligt nätverksbaserad och cachar inte appfiler, så publicerade uppdateringar fortsätter att slå igenom utan hård omladdning.
+
 ## Säkert arbetssätt
 
 Gör ändringar på en separat gren och skapa en pull request mot `databas`. Kontrollera sidan lokalt innan grenen slås ihop. GitHub Pages-sidan påverkas först när ändringen har slagits ihop i den gren som publiceras.

@@ -1,0 +1,110 @@
+(function(){
+  var installBanner=document.getElementById('installAppBanner');
+  var installButton=document.getElementById('installAppButton');
+  var installMenuButton=document.getElementById('installAppMenuButton');
+  var installShortcutButton=document.getElementById('installAppShortcutButton');
+  var profileMenuElement=document.getElementById('profileMenu');
+  var dismissButton=document.getElementById('dismissInstallApp');
+  var helpModal=document.getElementById('installHelpModal');
+  var helpSteps=document.getElementById('installHelpSteps');
+  var closeHelpButton=document.getElementById('closeInstallHelp');
+  var helpDoneButton=document.getElementById('installHelpDone');
+  var deferredInstallPrompt=null;
+  var userAgent=navigator.userAgent||'';
+  var isIos=/iPad|iPhone|iPod/.test(userAgent)||
+    (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  var isAndroid=/Android/i.test(userAgent);
+  var isStandalone=window.matchMedia('(display-mode: standalone)').matches||
+    window.navigator.standalone===true;
+
+  function wasDismissed(){
+    try{
+      var dismissedAt=parseInt(localStorage.getItem('groovy-install-dismissed'),10)||0;
+      return Date.now()-dismissedAt<30*24*60*60*1000;
+    }
+    catch(error){return false;}
+  }
+
+  function showBanner(){
+    if(!isStandalone&&!wasDismissed())installBanner.hidden=false;
+  }
+
+  function hideBanner(){
+    installBanner.hidden=true;
+  }
+
+  function openHelp(){
+    var steps=isIos
+      ?['Tap the Share button in your browser.','Choose “Add to Home Screen”.','Tap “Add” to install Groovy.']
+      :['Open your browser menu.','Choose “Install app” or “Add to Home screen”.','Confirm to install Groovy.'];
+    helpSteps.innerHTML=steps.map(function(step,index){
+      return '<div class="install-help-step"><span>'+(index+1)+'</span><div>'+step+'</div></div>';
+    }).join('');
+    helpModal.classList.add('visible');
+    helpModal.setAttribute('aria-hidden','false');
+    closeHelpButton.focus();
+  }
+
+  function closeHelp(){
+    helpModal.classList.remove('visible');
+    helpModal.setAttribute('aria-hidden','true');
+  }
+
+  async function startInstall(){
+    profileMenuElement.classList.remove('open');
+    if(!deferredInstallPrompt){
+      openHelp();
+      return;
+    }
+
+    deferredInstallPrompt.prompt();
+    var choice=await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt=null;
+    if(choice&&choice.outcome==='accepted')hideBanner();
+  }
+
+  if('serviceWorker' in navigator){
+    window.addEventListener('load',function(){
+      var hostedInGroovyPath=window.location.pathname.indexOf('/groovy')===0;
+      var workerUrl=hostedInGroovyPath?'/groovy/service-worker.js':'/service-worker.js';
+      var workerScope=hostedInGroovyPath?'/groovy/':'/';
+      navigator.serviceWorker.register(workerUrl,{scope:workerScope,updateViaCache:'none'})
+        .catch(function(error){console.warn('Could not enable app installation:',error);});
+    });
+  }
+
+  window.addEventListener('beforeinstallprompt',function(event){
+    event.preventDefault();
+    deferredInstallPrompt=event;
+    showBanner();
+  });
+
+  window.addEventListener('appinstalled',function(){
+    deferredInstallPrompt=null;
+    hideBanner();
+    installMenuButton.hidden=true;
+    installShortcutButton.hidden=true;
+    closeHelp();
+  });
+
+  installButton.addEventListener('click',startInstall);
+  installMenuButton.addEventListener('click',startInstall);
+  installShortcutButton.addEventListener('click',startInstall);
+
+  dismissButton.addEventListener('click',function(){
+    hideBanner();
+    try{localStorage.setItem('groovy-install-dismissed',String(Date.now()));}catch(error){}
+  });
+  closeHelpButton.addEventListener('click',closeHelp);
+  helpDoneButton.addEventListener('click',closeHelp);
+  helpModal.addEventListener('click',function(event){
+    if(event.target===helpModal)closeHelp();
+  });
+  document.addEventListener('keydown',function(event){
+    if(event.key==='Escape'&&helpModal.classList.contains('visible'))closeHelp();
+  });
+
+  installMenuButton.hidden=isStandalone;
+  installShortcutButton.hidden=isStandalone;
+  if((isIos||isAndroid)&&!isStandalone)showBanner();
+})();

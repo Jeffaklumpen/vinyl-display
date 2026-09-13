@@ -675,6 +675,14 @@ var closeTraderaModalButton=document.getElementById('closeTraderaModal');
 var traderaModalSubtitle=document.getElementById('traderaModalSubtitle');
 var traderaListingsStatus=document.getElementById('traderaListingsStatus');
 var traderaListingsGrid=document.getElementById('traderaListingsGrid');
+var ebayButton=document.getElementById('ebayButton');
+var ebayButtonLabel=document.getElementById('ebayButtonLabel');
+var ebayEnabled=ebayButton&&ebayButton.getAttribute('data-enabled')==='true';
+var ebayModal=document.getElementById('ebayModal');
+var closeEbayModalButton=document.getElementById('closeEbayModal');
+var ebayModalSubtitle=document.getElementById('ebayModalSubtitle');
+var ebayListingsStatus=document.getElementById('ebayListingsStatus');
+var ebayListingsGrid=document.getElementById('ebayListingsGrid');
 var copyDetails=document.getElementById('copyDetails');
 var copyDetailsContent=document.getElementById('copyDetailsContent');
 var copyDetailsToggle=document.getElementById('copyDetailsToggle');
@@ -714,11 +722,17 @@ var traderaAlbumIndex=-1;
 var traderaRequestVersion=0;
 var traderaListings=[];
 var traderaListingCache=new Map();
+var ebayAlbumIndex=-1;
+var ebayRequestVersion=0;
+var ebayListings=[];
+var ebayListingCache=new Map();
 var libraryPage=1;
 var RECORDS_PER_PAGE=52;
 var libraryPaginationTop=document.getElementById('libraryPaginationTop');
 var libraryPaginationBottom=document.getElementById('libraryPaginationBottom');
 var refreshedStyleMasters=new Set();
+
+if(ebayButton)ebayButton.hidden=!ebayEnabled;
 
 function esc(value){
   return String(value)
@@ -993,6 +1007,125 @@ async function loadTraderaListings(record,index){
 
   if(traderaModal.classList.contains('visible')&&traderaAlbumIndex===index){
     openTraderaModal();
+  }
+}
+
+function setEbayButtonState(state,count){
+  ebayButton.classList.remove('loading','empty','unavailable');
+  ebayButton.disabled=false;
+
+  if(state==='loading'){
+    ebayButton.classList.add('loading');
+    ebayButtonLabel.textContent='eBay · Checking…';
+  }else if(state==='ready'){
+    ebayButtonLabel.textContent='eBay · '+count+' '+(count===1?'listing':'listings');
+  }else if(state==='empty'){
+    ebayButton.classList.add('empty');
+    ebayButtonLabel.textContent='eBay · No listings';
+  }else{
+    ebayButton.classList.add('unavailable');
+    ebayButtonLabel.textContent='eBay · Unavailable';
+  }
+}
+
+function renderEbayListings(){
+  if(!ebayListings.length){
+    ebayListingsGrid.innerHTML='';
+    return;
+  }
+
+  ebayListingsGrid.innerHTML=ebayListings.map(function(listing){
+    var href=safeExternalUrl(listing.url);
+    var imageUrl=safeExternalUrl(listing.imageUrl);
+    var price=traderaPrice(listing);
+    var ends=traderaEndsText(listing.endDate);
+    var bids=Number(listing.bidCount||0);
+
+    return '<article class="tradera-listing-card">'+
+      '<a class="tradera-listing-image" href="'+esc(href||'#')+'" target="_blank" rel="noopener noreferrer" aria-label="View listing on eBay">'+
+        (imageUrl?'<img src="'+esc(imageUrl)+'" alt="" loading="lazy">':'<span class="record-icon" aria-hidden="true"></span>')+
+      '</a>'+
+      '<div class="tradera-listing-body">'+
+        '<h3>'+esc(listing.title||'Vinyl record')+'</h3>'+
+        '<div class="tradera-listing-price-row">'+
+          '<strong>'+esc(price||'See price')+'</strong>'+
+          (bids?'<span>'+bids+' '+(bids===1?'bid':'bids')+'</span>':'')+
+        '</div>'+
+        (ends?'<div class="tradera-listing-end">'+esc(ends)+'</div>':'')+
+        (href?'<a class="tradera-listing-link" href="'+esc(href)+'" target="_blank" rel="noopener noreferrer">View on eBay <span aria-hidden="true">↗</span></a>':'')+
+      '</div>'+
+    '</article>';
+  }).join('');
+}
+
+function openEbayModal(){
+  var record=records[ebayAlbumIndex];
+  if(!record)return;
+
+  ebayModalSubtitle.textContent=record[1]+' · '+record[2];
+  renderEbayListings();
+
+  if(ebayButton.classList.contains('loading')){
+    ebayListingsStatus.className='tradera-listings-status loading';
+    ebayListingsStatus.textContent='Finding active listings…';
+  }else if(ebayListings.length){
+    ebayListingsStatus.className='tradera-listings-status';
+    ebayListingsStatus.textContent=ebayListings.length+' active '+(ebayListings.length===1?'listing':'listings');
+  }else if(ebayButton.classList.contains('unavailable')){
+    ebayListingsStatus.className='tradera-listings-status error';
+    ebayListingsStatus.textContent='eBay is temporarily unavailable. Please try again shortly.';
+  }else{
+    ebayListingsStatus.className='tradera-listings-status empty';
+    ebayListingsStatus.textContent='No active vinyl LP listings found for this album right now.';
+  }
+
+  ebayModal.classList.add('visible');
+  ebayModal.setAttribute('aria-hidden','false');
+  closeEbayModalButton.focus();
+}
+
+function closeEbayModal(){
+  ebayModal.classList.remove('visible');
+  ebayModal.setAttribute('aria-hidden','true');
+}
+
+async function loadEbayListings(record,index){
+  ebayAlbumIndex=index;
+  ebayListings=[];
+  var requestVersion=++ebayRequestVersion;
+  var key=traderaCacheKey(record);
+  var cached=ebayListingCache.get(key);
+
+  if(cached&&Date.now()-cached.savedAt<5*60*1000){
+    ebayListings=cached.listings;
+    setEbayButtonState(ebayListings.length?'ready':'empty',ebayListings.length);
+    return;
+  }
+
+  setEbayButtonState('loading',0);
+
+  try{
+    var response=await supabaseClient.functions.invoke('ebay-search',{
+      body:{artist:record[1],album:record[2]}
+    });
+
+    if(requestVersion!==ebayRequestVersion)return;
+    if(response.error)throw response.error;
+
+    ebayListings=response.data&&Array.isArray(response.data.listings)
+      ?response.data.listings.filter(function(listing){return isRelevantTraderaListing(listing,record);})
+      :[];
+    ebayListingCache.set(key,{savedAt:Date.now(),listings:ebayListings});
+    setEbayButtonState(ebayListings.length?'ready':'empty',ebayListings.length);
+  }catch(error){
+    if(requestVersion!==ebayRequestVersion)return;
+    console.error('Could not load eBay listings:',error);
+    ebayListings=[];
+    setEbayButtonState('unavailable',0);
+  }
+
+  if(ebayModal.classList.contains('visible')&&ebayAlbumIndex===index){
+    openEbayModal();
   }
 }
 
@@ -1693,7 +1826,9 @@ function openAlbum(index){
   if(!record)return;
 
   closeTraderaModal();
+  closeEbayModal();
   loadTraderaListings(record,index);
+  if(ebayEnabled)loadEbayListings(record,index);
   copyDetailsRecordKey='';
   var isWishlist=window.libraryView==='wishlist';
   detailNumber.hidden=!isWishlist;
@@ -2041,7 +2176,9 @@ async function saveTrackRating(trackId,rating){
     
 function closeAlbum(){
   closeTraderaModal();
+  closeEbayModal();
   traderaRequestVersion++;
+  ebayRequestVersion++;
   albumOverlay.className='album-overlay';
   document.body.style.overflow='';
   setCopyDetailsExpanded(false);
@@ -2631,6 +2768,7 @@ function enableGridSorting(){
   var touchCard=null;
   var touchStartX=0;
   var touchStartY=0;
+  var touchLongPressActive=false;
 
   function resetPointerState(){
     clearTimeout(touchTimer);
@@ -2648,6 +2786,7 @@ function enableGridSorting(){
     clearTimeout(touchTimer);
     touchId=null;
     touchCard=null;
+    touchLongPressActive=false;
   }
 
   function findTouch(touchList,id){
@@ -2807,10 +2946,13 @@ function enableGridSorting(){
       touchTimer=setTimeout(function(){
         if(touchId===null||touchDragging||!touchCard)return;
 
-        startPointerDrag(touchCard,{
-          clientX:touchX,
-          clientY:touchY
-        });
+        touchLongPressActive=true;
+        suppressAlbumClick=true;
+        setDeleteMode(true);
+
+        if(navigator.vibrate){
+          try{navigator.vibrate(18);}catch(error){}
+        }
       },350);
     },{passive:true});
 
@@ -2828,11 +2970,16 @@ function enableGridSorting(){
         var movedX=Math.abs(touchX-touchStartX);
         var movedY=Math.abs(touchY-touchStartY);
 
-        if(movedX>8||movedY>8){
+        if(touchLongPressActive&&(movedX>8||movedY>8)){
+          startPointerDrag(touchCard,{
+            clientX:touchX,
+            clientY:touchY
+          });
+        }else if(!touchLongPressActive&&(movedX>8||movedY>8)){
           clearTimeout(touchTimer);
         }
 
-        return;
+        if(!touchDragging)return;
       }
 
       event.preventDefault();
@@ -2858,6 +3005,12 @@ function enableGridSorting(){
       if(touchDragging){
         event.preventDefault();
         finishPointerDrag();
+      }else if(touchLongPressActive){
+        event.preventDefault();
+        resetTouchState();
+        setTimeout(function(){
+          suppressAlbumClick=false;
+        },300);
       }else{
         resetTouchState();
       }
@@ -3035,7 +3188,6 @@ window.buildGrid=function(){
   document.getElementById('collectionTabButton').classList.toggle('active',!isWishlist);
   document.getElementById('wishlistTabButton').classList.toggle('active',isWishlist);
   document.getElementById('addAlbumButton').style.display=isViewingProfile?'none':'';
-  document.getElementById('deleteModeButton').style.display=isViewingProfile?'none':'';
   document.getElementById('filterButton').parentElement.style.display=isWishlist?'none':'';
 
   var visibleRecords=records.filter(function(record){
@@ -3249,6 +3401,20 @@ traderaModal.addEventListener('click',function(event){
   if(event.target===traderaModal)closeTraderaModal();
 });
 
+ebayButton.addEventListener('click',function(event){
+  event.preventDefault();
+  event.stopPropagation();
+  openEbayModal();
+});
+
+closeEbayModalButton.addEventListener('click',function(){
+  closeEbayModal();
+});
+
+ebayModal.addEventListener('click',function(event){
+  if(event.target===ebayModal)closeEbayModal();
+});
+
 albumOverlay.onclick=function(event){
   if((event||window.event).target===albumOverlay){
     closeAlbum();
@@ -3259,6 +3425,10 @@ document.onkeydown=function(event){
   event=event||window.event;
 
   if(event.keyCode===27){
+    if(ebayModal.classList.contains('visible')){
+      closeEbayModal();
+      return;
+    }
     if(traderaModal.classList.contains('visible')){
       closeTraderaModal();
       return;
@@ -3642,9 +3812,7 @@ myCollectionButton.addEventListener('click',async function(){
     history.pushState({},'','/groovy/');
     libraryPage=1;
 
-    deleteMode=false;
-    deleteModeButton.classList.remove('active');
-    document.body.classList.remove('delete-mode-active');
+    setDeleteMode(false);
 
     document.getElementById('viewedUserHeader').style.display='none';
     await window.loadCollection();
@@ -3660,9 +3828,7 @@ backToMyCollectionMobileButton.addEventListener('click',function(){
 
 function navigateLibrary(nextView){
     libraryPage=1;
-    deleteMode=false;
-    deleteModeButton.classList.remove('active');
-    document.body.classList.remove('delete-mode-active');
+    setDeleteMode(false);
     var url=window.location.pathname;
     if(nextView==='wishlist')url+='?view=wishlist';
     history.pushState({},'',url);
@@ -3681,19 +3847,25 @@ emptyWishlistAddButton.addEventListener('click',function(){
     addAlbumButton.click();
 });
 
-const deleteModeButton=document.getElementById('deleteModeButton');
-
 let deleteMode=false;
 
-deleteModeButton.addEventListener('click',function(event){
+function setDeleteMode(active){
+  deleteMode=Boolean(active);
+  document.body.classList.toggle('delete-mode-active',deleteMode);
+}
+
+document.addEventListener('click',function(event){
+  if(!deleteMode)return;
+
+  var target=event.target;
+  var isDeleteControl=target.closest&&target.closest('.delete-cover-button,.wishlist-remove-button,#removeAlbumModal');
+
+  if(isDeleteControl)return;
+
   event.preventDefault();
   event.stopPropagation();
-
-  deleteMode=!deleteMode;
-
-  deleteModeButton.classList.toggle('active',deleteMode);
-  document.body.classList.toggle('delete-mode-active',deleteMode);
-});
+  setDeleteMode(false);
+},true);
 
 let searchTimer=null;
 
@@ -3792,9 +3964,7 @@ async function loadOtherUserCollection(userId){
     viewedUserId=userId;
     libraryPage=1;
 
-    deleteMode=false;
-    deleteModeButton.classList.remove('active');
-    document.body.classList.remove('delete-mode-active');
+    setDeleteMode(false);
     
     const {data:profile,error:profileError}=await supabaseClient
         .from('profiles')
